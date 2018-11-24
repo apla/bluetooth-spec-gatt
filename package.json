@@ -1,0 +1,16 @@
+{
+  "name": "gatt",
+  "version": "1.0.0",
+  "description": "BLE GATT UUIDs",
+  "main": "index.js",
+  "scripts": {
+    "fetch-uuids": "node -r esm fetch-uuids.js"
+  },
+  "author": "Ivan Baktsheev <dot.and.thing@gmail.com>",
+  "license": "MIT",
+  "devDependencies": {
+    "needle": "^2.2.4",
+    "xmldom": "^0.1.27",
+    "esm": "^3.0.84"
+  }
+}
