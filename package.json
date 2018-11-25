@@ -1,7 +1,8 @@
 {
-  "name": "gatt",
+  "name": "bluetooth-spec-gatt",
   "version": "1.0.0",
-  "description": "BLE GATT UUIDs",
+  "description": "Bluetooth UIDS from GATT specifications",
+  "keywords": ["BLE", "Bluetooth", "GATT", "UUID", "Characteristic", "Service"],
   "main": "index.js",
   "scripts": {
     "fetch-uuids": "node -r esm fetch-uuids.js"

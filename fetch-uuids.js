@@ -1,5 +1,9 @@
 import fs from 'fs';
 
+import {promisify} from 'util';
+
+const readFile = promisify (fs.readFile);
+
 import needle from 'needle';
 
 import {DOMParser} from 'xmldom';
@@ -42,18 +46,24 @@ const sections = {
 const domainCodeRegexp = /^org\.bluetooth\.\w+\./;
 
 const parsers = {
-	default (node) {
-		return {
-			title: node.childNodes[1].textContent,
-			code:  node.childNodes[3].textContent.replace (domainCodeRegexp, ''),
-			id:    node.childNodes[5].textContent,
-		}
+	tableRow (node) {
+
+		const children = Array.from (node.childNodes).filter (n => n.nodeType === 1);
+
+		const recordCode = children[1].textContent;
+
+		const tableData = {
+			title: children[0].textContent,
+			code:  recordCode.replace (domainCodeRegexp, ''),
+			id:    children[2].textContent,
+		};
+
+		return fetchEntity (recordCode).then (entityData => ({
+			...tableData,
+			...entityData
+		}));
 	},
 
-}
-
-function fetchEntity () {
-	// https://www.bluetooth.com/api/gatt/XmlFile?xmlFileName=org.bluetooth.characteristic.aerobic_heart_rate_lower_limit.xml
 }
 
 function decodeHTMLTable ({doc, res, body, sectionName, sectionMeta}) {
@@ -73,9 +83,9 @@ function decodeHTMLTable ({doc, res, body, sectionName, sectionMeta}) {
 
 	const dataRowsParent = dataTable.getElementsByTagName ('tbody')[0];
 	
-	return Array.from (dataRowsParent.childNodes).filter (
+	return Promise.all (Array.from (dataRowsParent.childNodes).filter (
 		rowNode => rowNode.localName === 'tr'
-	).map (parsers[sectionName] || parsers.default);
+	).map (parsers[sectionName] || parsers.tableRow));
 
 }
 
@@ -95,7 +105,7 @@ function decodeJSDataTable ({doc, res, body, sectionName, sectionMeta}) {
 	}
 
 	const dataString = dataTable.textContent.split (/\r?\n/).filter (str => str.match (/^\s*data:\s*/))[0];
-	console.log (dataString);
+	// console.log (dataString);
 
 	let rows;
 
@@ -113,6 +123,108 @@ function decodeJSDataTable ({doc, res, body, sectionName, sectionMeta}) {
 
 }
 
+function decodeXMLFieldParam (node) {
+	const paramName = node.localName.toLowerCase ();
+	let   paramValue = node.textContent;
+	if (paramName === 'unit' || paramName === 'reference') {
+		paramValue = paramValue.replace (domainCodeRegexp, '');
+	}
+	if (paramName === 'enumerations') {
+		paramValue = Array.from (node.childNodes).filter (
+			n => n.nodeType === 1
+		).reduce ((a, n) => {
+			const eType = n.localName.toLowerCase();
+			const eKey  = n.getAttribute ('key');
+			const eVal  = n.getAttribute ('value');
+			if (eType === 'reserved' || eType === 'reservedforfutureuse') {
+				
+				let reserved = [
+					n.getAttribute ('start'),
+					n.getAttribute ('end')
+				];
+				if (reserved[0] === reserved[1])
+					reserved = [reserved[0]];
+				a[eType] = a[eType] || [];
+				a[eType].push (reserved.join ('-'));
+
+			} else if (eType === 'enumeration') {
+				if (eVal.toLowerCase () === 'reserved for future use') { // WHY???
+					a.reservedforfutureuse = a.reservedforfutureuse || [];
+					a.reservedforfutureuse.push (eKey);
+				} else {
+					a[eKey] = {
+						value: eVal,
+						description: n.getAttribute ('description'),
+					}
+				}
+			}
+			return a;
+		}, {})
+	}
+
+	// http://schemas.bluetooth.org/Documents/bitfield.xsd
+	if (paramName === 'bitfield') {
+		// TODO: bitfield itself can be reserved?
+		paramValue = Array.from (node.getElementsByTagName('Bit')).map (n => {
+			const bitDescr = {
+				offset: n.getAttribute ('index'),
+				size:   n.getAttribute ('size'),
+				name:   n.getAttribute ('name'),
+				enumerations: null
+			};
+			// console.log (n.nodeType, n.localName);
+			Array.from (n.childNodes).filter (c => c.nodeType === 1).forEach (c => {
+				if (c.localName === 'Enumerations') {
+					bitDescr.enumerations = decodeXMLFieldParam (c)[1];
+				} else {
+					console.log (c.localName);
+				}
+			})
+
+			return bitDescr;
+		})
+	}
+
+	return [paramName, paramValue];
+}
+
+function decodeXML (filename, node) {
+
+	const fieldsNodes = Array.from (node.getElementsByTagName ('Field'));
+	if (fieldsNodes.length) {
+		//if (fieldsNodes.length > 1)
+		//	console.log (filename + ": FIELD COUNT > 1", fieldsNodes.map (f => f.getAttribute ('name')).join (", "));
+	} else {
+		return {};
+	}
+
+	const fieldsData = [];
+
+	fieldsNodes.forEach (fieldNode => {
+		const fieldParams = {
+			name: fieldNode.getAttribute ('name')
+		};
+		Array.from (fieldNode.childNodes).filter (
+			n => n.nodeType === 1
+		).forEach (n => {
+			const [k, v] = decodeXMLFieldParam (n);
+			fieldParams[k] = v;
+		});
+		fieldsData.push (fieldParams);
+	})
+
+	return {fields: fieldsData};
+
+	// TODO
+	// <InformativeText>
+	//   <Abstract>Age of the User.</Abstract>
+	//   <InformativeDisclaimer></InformativeDisclaimer>
+	//   <Summary></Summary>
+	//   <Examples>
+	//     <Example>string</Example>
+
+}
+
 function singular (meta, name) {
 	return meta.singular ? meta.singular : name.substr (0, name.length - 1);
 }
@@ -123,8 +235,8 @@ function listToObject (name, list) {
 	return list.reduce ((object, record) => {
 		object[record.code] = record;
 		allIds[record.id] = {
-			...record,
-			code: name + '.' + record.code
+			scope: name,
+			code:  record.code
 		};
 		return object;
 	}, {})
@@ -144,15 +256,25 @@ function fetchAll () {
 		})];
 	})
 
-	const uuidsFile = fs.createWriteStream ('uuids.js');
+	const uuidsFile = fs.createWriteStream ('uuid.js');
 
 	Promise.all (allSectionQuery.map (sd => sd[1])).then (allSectionData => {
-		allSectionData.forEach ((sectionData, idx) => {
+		const exportable = allSectionData.map ((sectionData, idx) => {
 			const singularSectionName = allSectionQuery[idx][0];
-			uuidsFile.write ('const ' + singularSectionName + ' = ');
+			uuidsFile.write ('var ' + singularSectionName + ' = ');
 			uuidsFile.write (JSON.stringify (listToObject(singularSectionName, sectionData), null, "\t"));
 			uuidsFile.write (';\n\n');
-		})
+			return singularSectionName;
+		});
+
+		uuidsFile.write ('var shortUUID = ');
+		uuidsFile.write (JSON.stringify (allIds, null, "\t"));
+		uuidsFile.write (';\n\n');
+
+		uuidsFile.write ('module.exports = {\n\tshortUUID: shortUUID,\n\t');
+		uuidsFile.write (exportable.map (_ => _ + ': ' + _).join (',\n\t'));
+		uuidsFile.write ('\n};\n\n');
+
 	});
 }
 
@@ -173,6 +295,30 @@ function fetchSection (sectionPath) {
 	)
 }
 
+function fetchEntity (entityName) {
+	const xmlApiUrl = "https://www.bluetooth.com/api/gatt/XmlFile?xmlFileName=";
+	// https://www.bluetooth.com/api/gatt/XmlFile?xmlFileName=org.bluetooth.characteristic.aerobic_heart_rate_lower_limit.xml
+
+	const withRedirectOptions = {
+		follow: 5,
+		follow_set_cookies: true,
+		follow_set_referrer: true,
+		output: 'cache/' + entityName + '.xml'
+		// follow_if_same_host: true,
+	};
+
+	return readFile ('cache/' + entityName + '.xml').then (
+		buffer => buffer, // ok, return file contents from buffer
+		err => needle ('get', xmlApiUrl + entityName + '.xml', withRedirectOptions).then (
+			res => res.body // otherwise fetch from network
+		)
+	).then (buffer =>
+		parser.parseFromString (buffer.toString(), "text/xml")
+	).then (doc => decodeXML (entityName, doc));
+	
+
+	return Promise.resolve ({});
+}
 
 
 fetchAll ();
