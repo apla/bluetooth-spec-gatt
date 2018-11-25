@@ -2,7 +2,14 @@
   "name": "bluetooth-spec-gatt",
   "version": "1.0.0",
   "description": "Bluetooth UIDS from GATT specifications",
-  "keywords": ["BLE", "Bluetooth", "GATT", "UUID", "Characteristic", "Service"],
+  "keywords": [
+    "BLE",
+    "Bluetooth",
+    "GATT",
+    "UUID",
+    "Characteristic",
+    "Service"
+  ],
   "main": "index.js",
   "scripts": {
     "fetch-uuids": "node -r esm fetch-uuids.js"
@@ -13,5 +20,14 @@
     "needle": "^2.2.4",
     "xmldom": "^0.1.27",
     "esm": "^3.0.84"
-  }
+  },
+  "dependencies": {},
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/apla/bluetooth-spec-gatt.git"
+  },
+  "bugs": {
+    "url": "https://github.com/apla/bluetooth-spec-gatt/issues"
+  },
+  "homepage": "https://github.com/apla/bluetooth-spec-gatt#readme"
 }
